@@ -3,13 +3,14 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../utils/bible_books.dart';
 import '../utils/bible_chapters.dart'; // Import du nombre de chapitres
+import 'package:flutter/gestures.dart';
 
 class ChapterScreen extends StatefulWidget {
   final String book;
   final int chapter;
   final String livre;
 
-  const ChapterScreen({super.key, required this.book, required this.livre , required this.chapter});
+  const ChapterScreen({super.key, required this.book, required this.livre, required this.chapter});
 
   @override
   _ChapterScreenState createState() => _ChapterScreenState();
@@ -17,7 +18,9 @@ class ChapterScreen extends StatefulWidget {
 
 class _ChapterScreenState extends State<ChapterScreen> {
   String chapterText = "Chargement...";
-  bool isLoading = true; // Nouvelle variable pour suivre l'état du chargement
+  bool isLoading = true;
+  Map<int, String> translatedWords = {}; // Stocke les traductions des mots
+  Map<int, bool> isTranslated = {}; // Indique si un mot est traduit ou non
 
   @override
   void initState() {
@@ -27,7 +30,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
 
   Future<void> fetchChapter() async {
     setState(() {
-      isLoading = true; // Début du chargement
+      isLoading = true;
     });
 
     String? latinBook = bibleBooksLatin[widget.book];
@@ -35,7 +38,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
     if (latinBook == null) {
       setState(() {
         chapterText = "Livre non trouvé dans la Vulgate";
-        isLoading = false; // Fin du chargement
+        isLoading = false;
       });
       return;
     }
@@ -51,29 +54,94 @@ class _ChapterScreenState extends State<ChapterScreen> {
         final formattedText = verses.map((verse) => "${verse["verse"]}. ${verse["text"]}").join("\n\n");
         setState(() {
           chapterText = formattedText;
-          isLoading = false; // Fin du chargement
+          isLoading = false;
         });
       } else {
+        print("Erreur de chargement: ${response.statusCode}, Body: ${response.body}");
         setState(() {
           chapterText = "Erreur de chargement (${response.statusCode})";
-          isLoading = false; // Fin du chargement
+          isLoading = false;
         });
       }
     } catch (e) {
       setState(() {
         chapterText = "Erreur: $e";
-        isLoading = false; // Fin du chargement
+        isLoading = false;
       });
     }
+  }
+
+  Future<String> translateMyMemory(String text, String sourceLang, String targetLang) async {
+    final url = Uri.parse("https://api.mymemory.translated.net/get?q=$text&langpair=$sourceLang|$targetLang");
+
+    try {
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data["responseData"]["translatedText"]; // Retourne la traduction
+      } else {
+        throw Exception("Erreur API: ${response.statusCode}, Body: ${response.body}");
+      }
+    } catch (e) {
+      throw Exception("Erreur lors de la traduction: $e");
+    }
+  }
+
+  Future<String> translateWord(String word, String targetLanguage) async {
+    // Utilise MyMemory pour traduire le mot
+    return translateMyMemory(word, "la", targetLanguage); // "la" pour le latin
+  }
+
+  Widget buildTextWithClickableWords(String text) {
+    List<TextSpan> textSpans = [];
+    List<String> words = text.split(" ");
+
+    for (int i = 0; i < words.length; i++) {
+      final word = words[i];
+      textSpans.add(
+        TextSpan(
+          text: "${translatedWords[i] ?? word} ",
+          style: TextStyle(
+            color: isTranslated[i] == true ? Colors.blue : Colors.black,
+            fontWeight: isTranslated[i] == true ? FontWeight.bold : FontWeight.normal,
+          ),
+          recognizer: TapGestureRecognizer()
+            ..onTap = () async {
+              setState(() {
+                if (isTranslated[i] == true) {
+                  // Revenir au mot original en latin
+                  translatedWords.remove(i);
+                  isTranslated[i] = false;
+                } else {
+                  // Traduire le mot en français
+                  translateWord(word, "fr").then((translated) {
+                    setState(() {
+                      translatedWords[i] = translated;
+                      isTranslated[i] = true;
+                    });
+                  }).catchError((error) {
+                    print("Erreur lors de la traduction: $error");
+                  });
+                }
+              });
+            },
+        ),
+      );
+    }
+
+    return RichText(
+      text: TextSpan(
+        children: textSpans,
+        style: const TextStyle(fontSize: 18, color: Colors.black87),
+      ),
+      textAlign: TextAlign.justify,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     int totalChapters = bibleChapters[widget.book] ?? 1;
-    print("📖 Book: ${widget.book}");
-    print("📖 Livre: ${widget.livre}");
-    print("📊 Nombre total de chapitres: $totalChapters");
-    print("🔢 Chapitre actuel: ${widget.chapter}");
 
     return Scaffold(
       appBar: AppBar(
@@ -94,13 +162,12 @@ class _ChapterScreenState extends State<ChapterScreen> {
         ),
         child: Column(
           children: [
-            // En-tête avec icône et nom du livre
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 children: [
                   Icon(
-                    Icons.book, // Icône représentant le livre
+                    Icons.book,
                     size: 60,
                     color: Colors.blueGrey[800],
                   ),
@@ -117,8 +184,6 @@ class _ChapterScreenState extends State<ChapterScreen> {
                 ],
               ),
             ),
-
-            // Bloc de texte du chapitre ou indicateur de chargement
             Expanded(
               child: isLoading
                   ? const Center(
@@ -135,21 +200,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
                         ),
                         child: Padding(
                           padding: const EdgeInsets.all(20.0),
-                          child: Text(
-                            chapterText,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              height: 1.6,
-                              color: Colors.black87,
-                            ),
-                            textAlign: TextAlign.justify,
-                          ),
+                          child: buildTextWithClickableWords(chapterText),
                         ),
                       ),
                     ),
             ),
-
-            // Boutons de navigation et indicateur de progression
             Padding(
               padding: const EdgeInsets.all(8.0),
               child: Column(
@@ -223,4 +278,4 @@ class _ChapterScreenState extends State<ChapterScreen> {
       ),
     );
   }
-} 
+}
